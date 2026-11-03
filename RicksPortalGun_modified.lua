@@ -20,6 +20,7 @@ local Workspace = game:GetService("Workspace")
 local StarterGui = game:GetService("StarterGui")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
+local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 while not player do
@@ -154,6 +155,92 @@ local function easeInBack(x)
 end
 
 local portalFolder = make("Folder", { Name = "RicksPortals_Local" }, Workspace)
+
+--------------------------------------------------------------------------------
+-- MOON AREA (client-side)
+--------------------------------------------------------------------------------
+local moonFolder = make("Folder", { Name = "RicksPortalGun_Moon" }, Workspace)
+local MOON_CENTER = Vector3.new(0, 5000, 0)
+local MOON_SURFACE_Y = 5012
+local MOON_RADIUS = 600
+
+make("Part", {
+	Name = "MoonSurface",
+	Anchored = true,
+	CanCollide = true,
+	CanTouch = false,
+	CanQuery = true,
+	Shape = Enum.PartType.Cylinder,
+	Material = Enum.Material.Slate,
+	Color = Color3.fromRGB(115, 115, 112),
+	Size = Vector3.new(24, 1200, 1200),
+	CFrame = CFrame.new(MOON_CENTER) * CFrame.Angles(0, 0, math.rad(90)),
+}, moonFolder)
+
+-- Subtle surface craters.
+for i, crater in ipairs({
+	{ -230, -150, 115 }, { 190, -260, 78 }, { 310, 170, 130 },
+	{ -350, 230, 90 }, { 35, 330, 65 }, { -40, -390, 75 },
+}) do
+	make("Part", {
+		Name = "MoonCrater" .. i,
+		Anchored = true,
+		CanCollide = false,
+		CanTouch = false,
+		CanQuery = false,
+		Shape = Enum.PartType.Cylinder,
+		Material = Enum.Material.Slate,
+		Color = Color3.fromRGB(88, 88, 86),
+		Size = Vector3.new(1, crater[3], crater[3]),
+		CFrame = CFrame.new(crater[1], MOON_SURFACE_Y + 0.45, crater[2]) * CFrame.Angles(0, 0, math.rad(90)),
+	}, moonFolder)
+end
+
+-- Preserve the game's lighting and sky so cleanup can restore them exactly.
+local originalLighting = {
+	ClockTime = Lighting.ClockTime,
+	Brightness = Lighting.Brightness,
+	Ambient = Lighting.Ambient,
+	OutdoorAmbient = Lighting.OutdoorAmbient,
+	ExposureCompensation = Lighting.ExposureCompensation,
+}
+local moonSky = Lighting:FindFirstChildOfClass("Sky")
+local madeMoonSky = moonSky == nil
+if not moonSky then
+	moonSky = make("Sky", {}, Lighting)
+end
+local originalSky = {
+	StarCount = moonSky.StarCount,
+	CelestialBodiesShown = moonSky.CelestialBodiesShown,
+}
+local onMoon = false
+local function updateMoonEnvironment(hrp)
+	local p = hrp and hrp.Position
+	local inside = p ~= nil
+		and math.abs(p.Y - 5018) < 650
+		and Vector2.new(p.X, p.Z).Magnitude < MOON_RADIUS
+	if inside == onMoon then
+		return
+	end
+	onMoon = inside
+	if onMoon then
+		Lighting.ClockTime = 0
+		Lighting.Brightness = 1.2
+		Lighting.Ambient = Color3.fromRGB(75, 82, 110)
+		Lighting.OutdoorAmbient = Color3.fromRGB(45, 52, 78)
+		Lighting.ExposureCompensation = 0
+		moonSky.StarCount = 3000
+		moonSky.CelestialBodiesShown = true
+	else
+		Lighting.ClockTime = originalLighting.ClockTime
+		Lighting.Brightness = originalLighting.Brightness
+		Lighting.Ambient = originalLighting.Ambient
+		Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+		Lighting.ExposureCompensation = originalLighting.ExposureCompensation
+		moonSky.StarCount = originalSky.StarCount
+		moonSky.CelestialBodiesShown = originalSky.CelestialBodiesShown
+	end
+end
 
 local function raycastParams()
 	local params = RaycastParams.new()
@@ -1025,7 +1112,9 @@ local function saveWaypoints()
 	end
 	local data = {}
 	for _, w in ipairs(waypoints) do
-		table.insert(data, { name = w.name, x = w.x, y = w.y, z = w.z, lx = w.lx, lz = w.lz })
+		if not w.builtin then
+			table.insert(data, { name = w.name, x = w.x, y = w.y, z = w.z, lx = w.lx, lz = w.lz })
+		end
 	end
 	local ok = pcall(function()
 		if hasFolders and not isfolder(CONFIG.SAVE_FOLDER) then
@@ -1061,6 +1150,16 @@ local function loadWaypoints()
 	end)
 end
 loadWaypoints()
+-- Built-in Moon waypoint; it is not written into the user's saved waypoint list.
+table.insert(waypoints, 1, {
+	name = "Moon",
+	x = MOON_CENTER.X,
+	y = 5018,
+	z = MOON_CENTER.Z,
+	lx = 0,
+	lz = -1,
+	builtin = true,
+})
 
 local function newWaypointName()
 	local used = {}
@@ -1624,12 +1723,24 @@ do
 			Font = Enum.Font.GothamBold,
 			TextSize = 13,
 			TextColor3 = DARK_TEXT,
-			Text = "Portal",
+			Text = wp.builtin and "Teleport" or "Portal",
 			BorderSizePixel = 0,
 		}, row)
 		make("UICorner", { CornerRadius = UDim.new(0, 8) }, go)
 		go.Activated:Connect(function()
-			if fireWaypoint(wp) then
+			if wp.builtin then
+				local char = player.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					hrp.AssemblyAngularVelocity = Vector3.zero
+					hrp.CFrame = CFrame.new(wp.x, wp.y, wp.z)
+					closeMenu()
+					toast("Teleported to the Moon.", 2.5)
+				else
+					toast("No character to teleport.", 2)
+				end
+			elseif fireWaypoint(wp) then
 				closeMenu()
 			end
 		end)
@@ -1647,6 +1758,7 @@ do
 			BorderSizePixel = 0,
 		}, row)
 		make("UICorner", { CornerRadius = UDim.new(0, 8) }, del)
+		del.Visible = not wp.builtin
 		del.Activated:Connect(function()
 			local idx = table.find(waypoints, wp)
 			if idx then
@@ -2211,6 +2323,7 @@ bind(RunService.Heartbeat, function()
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local alive = hum ~= nil and hum.Health > 0
+	updateMoonEnvironment(hrp)
 
 	local doDots = now - lastDotUpdate >= 1 / 30
 	if doDots then
@@ -2380,6 +2493,22 @@ env.RicksPortalGunCleanup = function()
 	end)
 	pcall(function()
 		portalFolder:Destroy()
+	end)
+	pcall(function()
+		moonFolder:Destroy()
+	end)
+	pcall(function()
+		Lighting.ClockTime = originalLighting.ClockTime
+		Lighting.Brightness = originalLighting.Brightness
+		Lighting.Ambient = originalLighting.Ambient
+		Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+		Lighting.ExposureCompensation = originalLighting.ExposureCompensation
+		if madeMoonSky then
+			moonSky:Destroy()
+		else
+			moonSky.StarCount = originalSky.StarCount
+			moonSky.CelestialBodiesShown = originalSky.CelestialBodiesShown
+		end
 	end)
 	env.RicksPortalGunCleanup = nil
 end
